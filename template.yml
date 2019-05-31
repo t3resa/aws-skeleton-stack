@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Sample Outline CloudFormation Stack
+
+Mappings:
+  RegionMap:
+    us-east-1:
+    #Fill all regions here w/ AMI's
+
+Parameters:
+
+  Owner:
+    Type: String
+    AllowedPattern: "(?!admin|Admin|John Doe)[A-Za-z. ]*"  
+  UserPassword:
+    NoEcho: 'true'
+    Description: Admin account password. Must be at least 8 characters long and contain at least one number, and cannot contain word "password" or your username
+    Type: String
+    MinLength: '8'
+    AllowedPattern: "(?!password|Password)[A-Za-z0-9]*([a-zA-Z]+[0-9]+|[0-9]+[a-zA-Z]+)"
+    ConstraintDescription: Password must contain only letters and numbers, it must contain at least one number, and cannot contain your username or word "password"
+  DataOpsProjectName:
+    Default: AWS Automations
+    Description: ProjectName must contain only letters, numbers, and spaces. Minimum length is 3.
+    Type: String
+    MinLength: '3'
+    AllowedPattern: "[A-Za-z0-9. ]*"
+    ConstraintDescription: ProjectName must contain only letters, numbers, and spaces and minimum length is 3.
+  AWSAccessKey:
+    NoEcho: 'true'
+    Description: AWS Access Key
+    Type: String
+    MinLength: '8'
+  AWSSecretKey:
+    NoEcho: 'true'
+    Description: AWS Secret Key
+    Type: String
+    MinLength: '8'
+  KeyName:
+    Description: 'Key-pair name to use. Note : Make sure you choose a key which you have.'
+    Type: AWS::EC2::KeyPair::KeyName
+  ExtNetworkRange:
+    Description: External Network IP Range.
+    Type: String
+    MinLength: '10'
+    #Don't need this but great for firewall rule
+
+
+Resources:
+  NameEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sda1"
+        Ebs:
+          DeleteOnTermination: 'true'
+          VolumeSize: 50
+          VolumeType: gp2
+      ImageId:
+        Fn::FindInMap:
+        - RegionMap
+        - Ref: AWS::Region
+        - AMI
+      InstanceType: m4.xlarge
+      KeyName:
+        Ref: KeyName
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: 'true'
+        DeleteOnTermination: 'true'
+        DeviceIndex: '0'
+        GroupSet:
+        - Ref: SecurityGroupName
+        SubnetId:
+          Ref: PublicSubnetName
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Join:
+          - "-"
+          - - Ref: AWS::StackName
+            - InstanceName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash +xe
+          yum update -y
+          echo "==================================================================="
+          echo "=========================INSTALLING PACKAGES========================="
+          echo "==================================================================="
+          yum install git -y
+          yum install ansible -y
+          echo "==================================================================="
+          echo "=========================INSTALLING DOCKER-COMPOSE========================="
+          echo "==================================================================="
+          curl -L "https://github.com/docker/compose/releases/download/1.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          yum install -y yum-utils device-mapper-persistent-data lvm2 nano
+          yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo 
+          yum install -y docker-ce docker-ce-cli containerd.io
+          systemctl start docker
+          groupadd docker
+          usermod -aG docker centos
+          echo "==================================================================="
+          echo "=========================GIT CLONE========================="
+          echo "==================================================================="
+          git clone
+          cd my-repo 
+          echo "==================================================================="
+          echo "=========================SUBBING YOUR VALUES=========================" 
+          echo "==================================================================="         
+          cp .example .env
+          sed -i "s|Owner Name|${Owner}|" .env
+          sed -i "s|AAAAAAAAAAAAAAAAAAAA|${AWSAccessKey}|" .env
+          sed -i "s|BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB|${AWSSecretKey}|" .env
+          sed -i "s|KEY NAME WITHOUT .pem|${KeyName}|" .env
+          sed -i "s|AWS Automations|${DataOpsProjectName}|" .env
+          sed -i "s|us-west-2|${AWS::Region}|" .env
+          sed -i "s|my-bucket|bucket|" .env
+          sed -i "s|subnet|${PublicSubnet}|" .env
+          sed -i "s|vpc|${Vpc}|" .env
+          sed -i "s|S3_OBJECT_PATH=/files|S3_OBJECT_PATH=|" .env
+          sed -i "s|dbpassword|${UserPassword}|" .env
+          sed -i "s|userpassword|${UserPassword}|" .env
+          echo "==================================================================="
+          echo "=============================BUILDING========================================"
+          echo "==================================================================="
+          docker-compose run tcw build
+          echo "==================================================================="
+          echo "===========================DEPLOYING=========================================="
+          echo "==================================================================="
+          docker-compose-run tcw deploy
+
+    DependsOn:
+      - VpcGatewayAttachment
+      - PublicSubnetPublicRouteTableAssoc
+  DataOpsSecurityGroup:
+    Properties:
+      GroupDescription: Enabling access to all IPs and below listed ports
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: '22'
+        IpProtocol: tcp
+        ToPort: '22'
+      - CidrIp: 0.0.0.0/0
+        FromPort: '80'
+        IpProtocol: tcp
+        ToPort: '80'
+      - CidrIp: 0.0.0.0/0
+        FromPort: '8080'
+        IpProtocol: tcp
+        ToPort: '8080'
+      - CidrIp: 0.0.0.0/0
+        FromPort: '443'
+        IpProtocol: tcp
+        ToPort: '443'
+      - CidrIp: 0.0.0.0/0
+        FromPort: '9000'
+        IpProtocol: tcp
+        ToPort: '9000'
+      - CidrIp: 0.0.0.0/0
+        FromPort: '25826'
+        IpProtocol: udp
+        ToPort: '25826'
+      VpcId:
+        Ref: Vpc
+    Type: AWS::EC2::SecurityGroup
+  PublicRouteDefault:
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: VpcInternetGateway
+      RouteTableId:
+        Ref: PublicRouteTable
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+  PublicRouteTable:
+    Properties:
+      VpcId:
+        Ref: Vpc
+    Type: AWS::EC2::RouteTable
+  PublicSubnet:
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      VpcId:
+        Ref: Vpc
+    Type: AWS::EC2::Subnet
+  PublicSubnetPublicRouteTableAssoc:
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      SubnetId:
+        Ref: PublicSubnet
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  Vpc:
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: 'true'
+      EnableDnsSupport: 'true'
+    Type: AWS::EC2::VPC
+  VpcGatewayAttachment:
+    Properties:
+      InternetGatewayId:
+        Ref: VpcInternetGateway
+      VpcId:
+        Ref: Vpc
+    Type: AWS::EC2::VPCGatewayAttachment
+  VpcInternetGateway:
+    Type: AWS::EC2::InternetGateway       
